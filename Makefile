@@ -4,6 +4,15 @@
 
 VERSION := $(shell git describe --tags --always --dirty="-dev")
 
+# Project configuration
+PROJECT_NAME ?= go-template
+COVERAGE_FILE ?= /tmp/$(PROJECT_NAME).cover.tmp
+COVERAGE_THRESHOLD ?= 60
+
+# Build configuration
+LDFLAGS := -X github.com/flashbots/go-template/common.Version=$(VERSION)
+BUILD_FLAGS := -trimpath -ldflags "$(LDFLAGS)" -v
+
 ##@ Help
 
 .PHONY: help
@@ -12,7 +21,7 @@ help: ## Display this help.
 
 .PHONY: v
 v: ## Show the version
-	@echo "Version: ${VERSION}"
+	@echo "Version: $(VERSION)"
 
 ##@ Build
 
@@ -20,19 +29,30 @@ v: ## Show the version
 clean: ## Clean the build directory
 	rm -rf build/
 
-.PHONY: build-cli
-build-cli: ## Build the CLI
+build:
 	@mkdir -p ./build
-	go build -trimpath -ldflags "-X github.com/flashbots/go-template/common.Version=${VERSION}" -v -o ./build/cli cmd/cli/main.go
+
+.PHONY: build-cli
+build-cli: build ## Build the CLI
+	go build $(BUILD_FLAGS) -o ./build/cli cmd/cli/main.go
 
 .PHONY: build-httpserver
-build-httpserver: ## Build the HTTP server
-	@mkdir -p ./build
-	go build -trimpath -ldflags "-X github.com/flashbots/go-template/common.Version=${VERSION}" -v -o ./build/httpserver cmd/httpserver/main.go
+build-httpserver: build ## Build the HTTP server
+	go build $(BUILD_FLAGS) -o ./build/httpserver cmd/httpserver/main.go
 
-.PHONY: build
-build: build-cli build-httpserver ## Build all binaries
+.PHONY: build-all
+build-all: build-cli build-httpserver ## Build all binaries
 	@echo "Binaries built in ./build/"
+
+##@ Run
+
+.PHONY: run-cli
+run-cli: build-cli ## Build and run the CLI
+	./build/cli
+
+.PHONY: run-httpserver
+run-httpserver: build-httpserver ## Build and run the HTTP server
+	./build/httpserver
 
 ##@ Test & Development
 
@@ -44,10 +64,21 @@ test: ## Run tests
 test-race: ## Run tests with race detector
 	go test -race ./...
 
+.PHONY: test-coverage
+test-coverage: ## Run tests and check coverage threshold
+	@go test -coverprofile=coverage.out ./...
+	@coverage=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | tr -d '%'); \
+	echo "Coverage: $${coverage}%"; \
+	if [ "$${coverage%.*}" -lt "$(COVERAGE_THRESHOLD)" ]; then \
+		echo "Coverage $${coverage}% is below threshold $(COVERAGE_THRESHOLD)%"; \
+		exit 1; \
+	fi
+	@rm -f coverage.out
+
 .PHONY: lint
 lint: ## Run linters
-	gofmt -d -s .
-	gofumpt -d -extra .
+	@test -z "$$(gofmt -d -s .)" || (echo "gofmt check failed:"; gofmt -d -s .; exit 1)
+	@test -z "$$(gofumpt -d -extra .)" || (echo "gofumpt check failed:"; gofumpt -d -extra .; exit 1)
 	go vet ./...
 	staticcheck ./...
 	golangci-lint run
@@ -56,7 +87,7 @@ lint: ## Run linters
 .PHONY: fmt
 fmt: ## Format the code
 	gofmt -s -w .
-	gci write .
+	gci write --skip-generated -s standard -s default .
 	gofumpt -w -extra .
 	go mod tidy
 
@@ -67,32 +98,48 @@ gofumpt: ## Run gofumpt
 .PHONY: lt
 lt: lint test ## Run linters and tests
 
+.PHONY: ci
+ci: lint test-race ## Run all CI checks
+
 .PHONY: cover
 cover: ## Run tests with coverage
-	go test -coverprofile=/tmp/go-sim-lb.cover.tmp ./...
-	go tool cover -func /tmp/go-sim-lb.cover.tmp
-	unlink /tmp/go-sim-lb.cover.tmp
+	go test -coverprofile=$(COVERAGE_FILE) ./...
+	go tool cover -func $(COVERAGE_FILE)
+	rm -f $(COVERAGE_FILE)
 
 .PHONY: cover-html
 cover-html: ## Run tests with coverage and open the HTML report
-	go test -coverprofile=/tmp/go-sim-lb.cover.tmp ./...
-	go tool cover -html=/tmp/go-sim-lb.cover.tmp
-	unlink /tmp/go-sim-lb.cover.tmp
+	go test -coverprofile=$(COVERAGE_FILE) ./...
+	go tool cover -html=$(COVERAGE_FILE)
+	rm -f $(COVERAGE_FILE)
+
+##@ Docker
 
 .PHONY: docker-cli
 docker-cli: ## Build the CLI Docker image
 	DOCKER_BUILDKIT=1 docker build \
 		--platform linux/amd64 \
-		--build-arg VERSION=${VERSION} \
+		--build-arg VERSION=$(VERSION) \
 		--file cli.dockerfile \
-		--tag your-project \
+		--tag $(PROJECT_NAME)-cli:$(VERSION) \
+		--tag $(PROJECT_NAME)-cli:latest \
 	.
 
 .PHONY: docker-httpserver
 docker-httpserver: ## Build the HTTP server Docker image
 	DOCKER_BUILDKIT=1 docker build \
 		--platform linux/amd64 \
-		--build-arg VERSION=${VERSION} \
+		--build-arg VERSION=$(VERSION) \
 		--file httpserver.dockerfile \
-		--tag your-project \
+		--tag $(PROJECT_NAME)-httpserver:$(VERSION) \
+		--tag $(PROJECT_NAME)-httpserver:latest \
 	.
+
+##@ Tools
+
+.PHONY: install-tools
+install-tools: ## Install development tools
+	go install mvdan.cc/gofumpt@latest
+	go install github.com/daixiang0/gci@latest
+	go install honnef.co/go/tools/cmd/staticcheck@latest
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
