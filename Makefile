@@ -2,7 +2,9 @@
 # and Reth: https://github.com/paradigmxyz/reth/blob/main/Makefile
 .DEFAULT_GOAL := help
 
-VERSION := $(shell git describe --tags --always --dirty="-dev")
+GIT_VER := $(shell git describe --tags --always --dirty="-dev")
+VERSION ?= $(GIT_VER)
+PROJECT_NAME := go-template
 
 ##@ Help
 
@@ -46,8 +48,8 @@ test-race: ## Run tests with race detector
 
 .PHONY: lint
 lint: ## Run linters
-	gofmt -d -s .
-	gofumpt -d -extra .
+	@test -z "$$(gofmt -d -s .)" || (gofmt -d -s . && exit 1)
+	@test -z "$$(gofumpt -d -extra .)" || (gofumpt -d -extra . && exit 1)
 	go vet ./...
 	staticcheck ./...
 	golangci-lint run
@@ -69,15 +71,15 @@ lt: lint test ## Run linters and tests
 
 .PHONY: cover
 cover: ## Run tests with coverage
-	go test -coverprofile=/tmp/go-sim-lb.cover.tmp ./...
-	go tool cover -func /tmp/go-sim-lb.cover.tmp
-	unlink /tmp/go-sim-lb.cover.tmp
+	go test -coverprofile=/tmp/$(PROJECT_NAME).cover.tmp ./...
+	go tool cover -func /tmp/$(PROJECT_NAME).cover.tmp
+	unlink /tmp/$(PROJECT_NAME).cover.tmp
 
 .PHONY: cover-html
 cover-html: ## Run tests with coverage and open the HTML report
-	go test -coverprofile=/tmp/go-sim-lb.cover.tmp ./...
-	go tool cover -html=/tmp/go-sim-lb.cover.tmp
-	unlink /tmp/go-sim-lb.cover.tmp
+	go test -coverprofile=/tmp/$(PROJECT_NAME).cover.tmp ./...
+	go tool cover -html=/tmp/$(PROJECT_NAME).cover.tmp
+	unlink /tmp/$(PROJECT_NAME).cover.tmp
 
 .PHONY: docker-cli
 docker-cli: ## Build the CLI Docker image
@@ -85,7 +87,7 @@ docker-cli: ## Build the CLI Docker image
 		--platform linux/amd64 \
 		--build-arg VERSION=${VERSION} \
 		--file cli.dockerfile \
-		--tag your-project \
+		--tag $(PROJECT_NAME)-cli \
 	.
 
 .PHONY: docker-httpserver
@@ -94,5 +96,5 @@ docker-httpserver: ## Build the HTTP server Docker image
 		--platform linux/amd64 \
 		--build-arg VERSION=${VERSION} \
 		--file httpserver.dockerfile \
-		--tag your-project \
+		--tag $(PROJECT_NAME)-httpserver \
 	.
