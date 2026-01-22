@@ -2,7 +2,17 @@
 # and Reth: https://github.com/paradigmxyz/reth/blob/main/Makefile
 .DEFAULT_GOAL := help
 
+# Build configuration
 VERSION := $(shell git describe --tags --always --dirty="-dev")
+BUILD_DIR := ./build
+MODULE := github.com/flashbots/go-template
+LDFLAGS := -X $(MODULE)/common.Version=$(VERSION)
+
+# Docker configuration
+DOCKER_REGISTRY ?= your-registry
+
+# Coverage configuration
+COVER_FILE := /tmp/go-template.cover.tmp
 
 ##@ Help
 
@@ -12,27 +22,32 @@ help: ## Display this help.
 
 .PHONY: v
 v: ## Show the version
-	@echo "Version: ${VERSION}"
+	@echo "Version: $(VERSION)"
 
 ##@ Build
 
 .PHONY: clean
 clean: ## Clean the build directory
-	rm -rf build/
+	rm -rf $(BUILD_DIR)/
 
 .PHONY: build-cli
 build-cli: ## Build the CLI
-	@mkdir -p ./build
-	go build -trimpath -ldflags "-X github.com/flashbots/go-template/common.Version=${VERSION}" -v -o ./build/cli cmd/cli/main.go
+	@mkdir -p $(BUILD_DIR)
+	go build -trimpath -ldflags "$(LDFLAGS)" -v -o $(BUILD_DIR)/cli cmd/cli/main.go
 
 .PHONY: build-httpserver
 build-httpserver: ## Build the HTTP server
-	@mkdir -p ./build
-	go build -trimpath -ldflags "-X github.com/flashbots/go-template/common.Version=${VERSION}" -v -o ./build/httpserver cmd/httpserver/main.go
+	@mkdir -p $(BUILD_DIR)
+	go build -trimpath -ldflags "$(LDFLAGS)" -v -o $(BUILD_DIR)/httpserver cmd/httpserver/main.go
 
 .PHONY: build
 build: build-cli build-httpserver ## Build all binaries
-	@echo "Binaries built in ./build/"
+	@echo "Binaries built in $(BUILD_DIR)/"
+
+.PHONY: install
+install: ## Install binaries to GOPATH/bin
+	go install -trimpath -ldflags "$(LDFLAGS)" ./cmd/cli
+	go install -trimpath -ldflags "$(LDFLAGS)" ./cmd/httpserver
 
 ##@ Test & Development
 
@@ -46,8 +61,8 @@ test-race: ## Run tests with race detector
 
 .PHONY: lint
 lint: ## Run linters
-	gofmt -d -s .
-	gofumpt -d -extra .
+	@if [ -n "$$(gofmt -d -s . 2>&1)" ]; then gofmt -d -s .; exit 1; fi
+	@if [ -n "$$(gofumpt -d -extra . 2>&1)" ]; then gofumpt -d -extra .; exit 1; fi
 	go vet ./...
 	staticcheck ./...
 	golangci-lint run
@@ -69,30 +84,45 @@ lt: lint test ## Run linters and tests
 
 .PHONY: cover
 cover: ## Run tests with coverage
-	go test -coverprofile=/tmp/go-sim-lb.cover.tmp ./...
-	go tool cover -func /tmp/go-sim-lb.cover.tmp
-	unlink /tmp/go-sim-lb.cover.tmp
+	go test -coverprofile=$(COVER_FILE) ./...
+	go tool cover -func $(COVER_FILE)
+	rm -f $(COVER_FILE)
 
 .PHONY: cover-html
 cover-html: ## Run tests with coverage and open the HTML report
-	go test -coverprofile=/tmp/go-sim-lb.cover.tmp ./...
-	go tool cover -html=/tmp/go-sim-lb.cover.tmp
-	unlink /tmp/go-sim-lb.cover.tmp
+	go test -coverprofile=$(COVER_FILE) ./...
+	go tool cover -html=$(COVER_FILE)
+	rm -f $(COVER_FILE)
+
+.PHONY: run-cli
+run-cli: build-cli ## Build and run the CLI
+	$(BUILD_DIR)/cli
+
+.PHONY: run-httpserver
+run-httpserver: build-httpserver ## Build and run the HTTP server
+	$(BUILD_DIR)/httpserver
+
+##@ Docker
 
 .PHONY: docker-cli
 docker-cli: ## Build the CLI Docker image
 	DOCKER_BUILDKIT=1 docker build \
 		--platform linux/amd64 \
-		--build-arg VERSION=${VERSION} \
+		--build-arg VERSION=$(VERSION) \
 		--file cli.dockerfile \
-		--tag your-project \
+		--tag $(DOCKER_REGISTRY)/cli:$(VERSION) \
+		--tag $(DOCKER_REGISTRY)/cli:latest \
 	.
 
 .PHONY: docker-httpserver
 docker-httpserver: ## Build the HTTP server Docker image
 	DOCKER_BUILDKIT=1 docker build \
 		--platform linux/amd64 \
-		--build-arg VERSION=${VERSION} \
+		--build-arg VERSION=$(VERSION) \
 		--file httpserver.dockerfile \
-		--tag your-project \
+		--tag $(DOCKER_REGISTRY)/httpserver:$(VERSION) \
+		--tag $(DOCKER_REGISTRY)/httpserver:latest \
 	.
+
+.PHONY: docker
+docker: docker-cli docker-httpserver ## Build all Docker images
